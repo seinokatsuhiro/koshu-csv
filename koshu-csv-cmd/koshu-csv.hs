@@ -57,7 +57,7 @@ options =
     , Z.req  "o" ["output"] "FILE.k"    "File: Output file"
 
     , Z.req  "l" ["layout"] "FILE"      "Data: Layout file"
-    , Z.opt  ""  ["body"] "NUM"         "Data: Line number at body starts (default 1)"
+    , Z.req  ""  ["drop"] "NUM"         "Data: Number of dropping lines"
 
     , Z.flag ""  ["to-decimal"]         "Term: Convert decimal number if passible"
     , Z.flag ""  ["to-empty"]           "Term: Convert empty string to ()"
@@ -70,7 +70,6 @@ options =
 -- | Command parameter.
 data Para = Para
     { paraLayout     :: CsvLayout
-    , paraBody       :: Int               -- ^ Line number at body starts
     , paraEmacsMode  :: Bool              -- ^ Inlucde emacs mode
     , paraIncludes   :: [String]          -- ^ Inlucde lines
     , paraLicenses   :: [String]          -- ^ License lines
@@ -91,12 +90,14 @@ initPara (Right (z, args)) =
        let lay' = lay { csvSeq           = case opt "seq" "/seq" of
                                              Nothing -> csvSeq lay
                                              Just n  -> Just $ K.toTermName n
+                      , csvDrop          = case reql "drop" of
+                                             Nothing -> csvDrop lay
+                                             Just n  -> K.fromMaybe 1 $ K.stringInt n
                       , csvGlobalEmpty   = flag "to-empty"   || csvGlobalEmpty   lay
                       , csvGlobalDecimal = flag "to-decimal" || csvGlobalDecimal lay }
        return $ Para { paraLayout     = case trim of
                                           Nothing -> lay'
                                           Just t  -> lay' { csvGlobalTrim = t }
-                     , paraBody       = body
                      , paraEmacsMode  = flag "emacs-mode"
                      , paraIncludes   = comment
                      , paraLicenses   = license
@@ -110,10 +111,6 @@ initPara (Right (z, args)) =
       req   = Z.getReq     z
       reql  = Z.getReqLast z
       opt   = Z.getOptLast z
-
-      body = K.fromMaybe 1 $ do
-               n <- opt "body" "1"
-               K.stringInt n
 
       trim | flag "trim"        = Just (True, True)
            | flag "trim-both"   = Just (True, True)
@@ -131,18 +128,20 @@ readTextFiles paths =
 
 data CsvLayout =
     CsvLayout
-    { csvClass          :: K.JudgeClass
-    , csvSeq            :: Maybe K.TermName
-    , csvTerms          :: [CsvTerm]
-    , csvGlobalTrim     :: (Bool, Bool)
-    , csvGlobalEmpty    :: Bool
-    , csvGlobalDecimal  :: Bool
+    { csvClass          :: K.JudgeClass       -- ^ Judgement class
+    , csvSeq            :: Maybe K.TermName   -- ^ Add sequential number term
+    , csvTerms          :: [CsvTerm]          -- ^ Term specifications
+    , csvDrop           :: Int                -- ^ Number of dropping lines
+    , csvGlobalTrim     :: (Bool, Bool)       -- ^ Trim value
+    , csvGlobalEmpty    :: Bool               -- ^ Convert empty string
+    , csvGlobalDecimal  :: Bool               -- ^ Convert decimal number
     } deriving (Show, Eq, Ord)
 
 instance K.Default CsvLayout where
     def = CsvLayout { csvClass         = "CSV"
                     , csvSeq           = Nothing
                     , csvTerms         = []
+                    , csvDrop          = 0
                     , csvGlobalTrim    = (False, False)
                     , csvGlobalEmpty   = False
                     , csvGlobalDecimal = False }
@@ -194,6 +193,12 @@ layoutClause (P.Term n : ks) lay =
        Right $ lay { csvTerms = term : csvTerms lay }
 layoutClause [P.TBar "|==", P.TRaw cl] lay =
     Right $ lay { csvClass = cl }
+layoutClause (P.TRaw "drop" : ts) lay =
+    case ts of
+      [P.TRaw n] -> case K.stringInt n of
+                      Just i  -> Right $ lay { csvDrop = i }
+                      Nothing -> Left $ K.abortBecause "Expect integer"
+      _                       -> Left $ K.abortBecause "Expect integer"
 layoutClause [P.TRaw "seq"]           lay = Right $ lay { csvSeq = Just $ K.toTermName "seq" }
 layoutClause [P.TRaw "seq", P.Term n] lay = Right $ lay { csvSeq = Just $ K.toTermName n }
 layoutClause [P.TRaw k] lay
@@ -261,14 +266,11 @@ parseConvertCsv p s =
 -- | Convert CSV.
 convertCsv :: Para -> [Csv.Record] -> [K.JudgeC]
 convertCsv p csv = zipWith judge (K.ints 1) csv' where
-    judge   = csvJudge $ paraLayout p
+    lay     = paraLayout p
+    judge   = csvJudge lay
     csv'    = omitEmptyLines
                $ K.map2 (trimValue $ csvGlobalTrim $ paraLayout p)
-               $ dropHead (paraBody p) csv
-
--- | Drop heading
-dropHead :: Int -> K.Map [Csv.Record]
-dropHead n = drop (n - 1)
+               $ drop (csvDrop lay) csv
 
 -- | Omit empty lines.
 omitEmptyLines :: K.Map [Csv.Record]
