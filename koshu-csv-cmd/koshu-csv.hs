@@ -38,10 +38,10 @@ mainPara p@Para { paraHelp = help, paraVersion = version }
     | help       = Z.printHelp usageHeader options
     | version    = putStrLn versionString
     | otherwise  = do ls <- convertPrintCsvFiles p
-                      let output = unlines ls
+                      let output = K.mixBlock ls
                       case paraOutput p of
-                        Nothing   -> putStr output
-                        Just path -> writeFile path output
+                        Nothing   -> K.putMix K.crlfBreak output
+                        Just path -> K.writeMix K.crlfBreak path output
 
 
 -- --------------------------------------------  Parameter
@@ -221,48 +221,52 @@ csvTermKeyword = loop where
 
 -- --------------------------------------------  Convert CSV file
 
-convertPrintCsvFiles :: Para -> IO [String]
+convertPrintCsvFiles :: Para -> IO [K.MixText]
 convertPrintCsvFiles p =
     do ls <- convertPrintCsvFile (convertCsvString p) `mapM` paraInput p
-       return $ appendBlock [mode', include', license', concat ls]
+       return $ appendBlock $ mode' : include' : license' : ls
     where
-      mode'     | paraEmacsMode p  = ["** -*- koshu -*-"]
+      mode'     | paraEmacsMode p  = mixes ["** -*- koshu -*-"]
                 | otherwise        = []
 
       include   = paraIncludes p
       include'  | null include     = []
-                | otherwise        = include
+                | otherwise        = mixes include
 
       license   = paraLicenses p
       license'  | null license     = []
-                | otherwise        = ["=== license", ""]
-                                     ++ map ("  " ++) license
-                                     ++ ["", "=== rel"]
+                | otherwise        = mixes
+                                     ( ["=== license", ""]
+                                       ++ map ("  " ++) license
+                                       ++ ["", "=== rel"] )
 
-appendBlock :: [[String]] -> [String]
+appendBlock :: [[K.MixText]] -> [K.MixText]
 appendBlock [] = []
 appendBlock ([] : bs) = appendBlock bs
-appendBlock [b]       = b
-appendBlock (b : bs)  = b ++ [""] ++ appendBlock bs
+appendBlock [b]       = [K.mixLines b]
+appendBlock (b : bs)  = K.mixLines b : K.mixHard : appendBlock bs
 
 -- | Convert and print CSV file to Koshucode.
-convertPrintCsvFile :: K.ManyMap String -> FilePath -> IO [String]
+convertPrintCsvFile :: (FilePath -> String -> [K.MixText]) -> FilePath -> IO [K.MixText]
 convertPrintCsvFile f path =
     do file <- K.readBzFile path
        bz   <- K.abortLeft $ K.bzFileContent file
-       return $ f $ K.bzString bz
+       return $ mixes $ f path $ K.bzString bz
 
 -- | Convert CSV string.
-convertCsvString :: Para -> K.ManyMap String
-convertCsvString p s = K.plainEncode <$> parseConvertCsv p s
+convertCsvString :: Para -> FilePath -> String -> [K.MixText]
+convertCsvString p path content = K.mixPlainEncode <$> parseConvertCsv p path content
+
+mixes :: (Functor f, K.Mix a) => f a -> f K.MixText
+mixes = fmap K.mix
 
 
 -- --------------------------------------------  Convert CSV string
 
 -- | Parse and convert CSV.
-parseConvertCsv :: Para -> String -> [K.JudgeC]
-parseConvertCsv p s =
-    case Csv.parseCSV "<stdin>" s of
+parseConvertCsv :: Para -> FilePath -> String -> [K.JudgeC]
+parseConvertCsv p path content =
+    case Csv.parseCSV path content of
       Left a    -> error $ show a
       Right csv -> convertCsv p csv
 
