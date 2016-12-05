@@ -74,7 +74,6 @@ data Para = Para
     , paraEmacsMode  :: Bool              -- ^ Inlucde emacs mode
     , paraIncludes   :: [String]          -- ^ Inlucde lines
     , paraLicenses   :: [String]          -- ^ License lines
-    , paraTrim       :: (Bool, Bool)      -- ^ Trim value
     , paraEmpty      :: Bool              -- ^ Convert empty string
     , paraDecimal    :: Bool              -- ^ Convert decimal number
     , paraInput      :: [FilePath]        -- ^ Input CSV files
@@ -91,13 +90,14 @@ initPara (Right (z, args)) =
     do comment <- readTextFiles $ req "include"
        license <- readTextFiles $ req "license"
        layout  <- readLayoutFiles $ req "layout"
-       return $ Para { paraLayout     = layout
+       return $ Para { paraLayout     = case trim of
+                                          Nothing -> layout
+                                          Just t  -> layout { csvGlobalTrim = t }
                      , paraBody       = body
                      , paraSeq        = K.toTermName <$> opt "seq" "/seq"
                      , paraEmacsMode  = flag "emacs-mode"
                      , paraIncludes   = comment
                      , paraLicenses   = license
-                     , paraTrim       = trim
                      , paraEmpty      = flag "to-empty"
                      , paraDecimal    = flag "to-decimal"
                      , paraInput      = args
@@ -115,11 +115,11 @@ initPara (Right (z, args)) =
                n <- opt "body" "1"
                K.stringInt n
 
-      trim | flag "trim"       = (True, True)
-           | flag "trim-both"  = (True, True)
-           | flag "trim-left"  = (True, False)
-           | flag "trim-right" = (False, True)
-           | otherwise         = (False, False)
+      trim | flag "trim"        = Just (True, True)
+           | flag "trim-both"   = Just (True, True)
+           | flag "trim-left"   = Just (True, False)
+           | flag "trim-right"  = Just (False, True)
+           | otherwise          = Nothing
 
 readTextFiles :: [FilePath] -> IO [String]
 readTextFiles paths =
@@ -131,13 +131,15 @@ readTextFiles paths =
 
 data CsvLayout =
     CsvLayout
-    { csvClass :: K.JudgeClass
-    , csvTerms :: [CsvTerm]
+    { csvClass       :: K.JudgeClass
+    , csvTerms       :: [CsvTerm]
+    , csvGlobalTrim  :: (Bool, Bool)
     } deriving (Show, Eq, Ord)
 
 instance K.Default CsvLayout where
-    def = CsvLayout { csvClass = "CSV"
-                    , csvTerms = [] }
+    def = CsvLayout { csvClass      = "CSV"
+                    , csvTerms      = []
+                    , csvGlobalTrim = (False, False) }
 
 data CsvTerm =
     CsvTerm { csvTermName :: K.TermName
@@ -178,6 +180,11 @@ layoutClause [P.Term n] lay =
     in Right $ lay { csvTerms = term : csvTerms lay }
 layoutClause [P.TBar "|==", P.TRaw cl] lay =
     Right $ lay { csvClass = cl }
+layoutClause [P.TRaw k] lay
+    | k == "trim"        = Right $ lay { csvGlobalTrim = (True,  True)  }
+    | k == "trim-both"   = Right $ lay { csvGlobalTrim = (True,  True)  }
+    | k == "trim-begin"  = Right $ lay { csvGlobalTrim = (True,  False) }
+    | k == "trim-end"    = Right $ lay { csvGlobalTrim = (False, True)  }
 layoutClause l _ = K.abortable "clause" l $ Left $ K.abortBecause "unknown layout"
 
 
@@ -236,7 +243,7 @@ convertCsv :: Para -> [Csv.Record] -> [K.JudgeC]
 convertCsv p csv = zipWith judge (K.ints 1) csv' where
     judge = csvJudge (paraSeq p) (paraEmpty p, paraDecimal p) (paraLayout p)
     csv'  = omitEmptyLines
-              $ K.map2 (trimValue $ paraTrim p)
+              $ K.map2 (trimValue $ csvGlobalTrim $ paraLayout p)
               $ dropHead (paraBody p) csv
 
 -- | Drop heading
@@ -256,7 +263,7 @@ trimValue (False , True)  = K.trimEnd
 
 -- | Create judgement.
 csvJudge :: Maybe K.TermName -> (Bool, Bool) -> CsvLayout -> Int -> Csv.Record -> K.JudgeC
-csvJudge maybeSeq to (CsvLayout cl ns) n values
+csvJudge maybeSeq to CsvLayout { csvClass = cl, csvTerms = ns } n values
     = case maybeSeq of
         Nothing   -> K.affirm cl ts
         Just name -> K.affirm cl $ (name, K.pInt n) : ts
