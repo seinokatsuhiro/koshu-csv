@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# OPTIONS_GHC -Wall #-}
 
 -- | Convert CSV to Koshucode
@@ -70,7 +71,6 @@ options =
 data Para = Para
     { paraLayout     :: CsvLayout
     , paraBody       :: Int               -- ^ Line number at body starts
-    , paraSeq        :: Maybe K.TermName  -- ^ Add sequential number term
     , paraEmacsMode  :: Bool              -- ^ Inlucde emacs mode
     , paraIncludes   :: [String]          -- ^ Inlucde lines
     , paraLicenses   :: [String]          -- ^ License lines
@@ -88,13 +88,15 @@ initPara (Right (z, args)) =
     do comment <- readTextFiles $ req "include"
        license <- readTextFiles $ req "license"
        lay  <- readLayoutFiles $ req "layout"
-       let lay' = lay { csvGlobalEmpty   = flag "to-empty"   || csvGlobalEmpty   lay
+       let lay' = lay { csvSeq           = case opt "seq" "/seq" of
+                                             Nothing -> csvSeq lay
+                                             Just n  -> Just $ K.toTermName n
+                      , csvGlobalEmpty   = flag "to-empty"   || csvGlobalEmpty   lay
                       , csvGlobalDecimal = flag "to-decimal" || csvGlobalDecimal lay }
        return $ Para { paraLayout     = case trim of
                                           Nothing -> lay'
                                           Just t  -> lay' { csvGlobalTrim = t }
                      , paraBody       = body
-                     , paraSeq        = K.toTermName <$> opt "seq" "/seq"
                      , paraEmacsMode  = flag "emacs-mode"
                      , paraIncludes   = comment
                      , paraLicenses   = license
@@ -130,6 +132,7 @@ readTextFiles paths =
 data CsvLayout =
     CsvLayout
     { csvClass          :: K.JudgeClass
+    , csvSeq            :: Maybe K.TermName
     , csvTerms          :: [CsvTerm]
     , csvGlobalTrim     :: (Bool, Bool)
     , csvGlobalEmpty    :: Bool
@@ -137,7 +140,8 @@ data CsvLayout =
     } deriving (Show, Eq, Ord)
 
 instance K.Default CsvLayout where
-    def = CsvLayout { csvClass          = "CSV"
+    def = CsvLayout { csvClass         = "CSV"
+                    , csvSeq           = Nothing
                     , csvTerms         = []
                     , csvGlobalTrim    = (False, False)
                     , csvGlobalEmpty   = False
@@ -190,6 +194,8 @@ layoutClause (P.Term n : ks) lay =
        Right $ lay { csvTerms = term : csvTerms lay }
 layoutClause [P.TBar "|==", P.TRaw cl] lay =
     Right $ lay { csvClass = cl }
+layoutClause [P.TRaw "seq"]           lay = Right $ lay { csvSeq = Just $ K.toTermName "seq" }
+layoutClause [P.TRaw "seq", P.Term n] lay = Right $ lay { csvSeq = Just $ K.toTermName n }
 layoutClause [P.TRaw k] lay
     | k == "trim"        = Right $ lay { csvGlobalTrim    = (True,  True)  }
     | k == "trim-both"   = Right $ lay { csvGlobalTrim    = (True,  True)  }
@@ -255,12 +261,10 @@ parseConvertCsv p s =
 -- | Convert CSV.
 convertCsv :: Para -> [Csv.Record] -> [K.JudgeC]
 convertCsv p csv = zipWith judge (K.ints 1) csv' where
-    lay    = paraLayout p
-    global = (csvGlobalEmpty lay, csvGlobalDecimal lay)
-    judge  = csvJudge (paraSeq p) global (paraLayout p)
-    csv'   = omitEmptyLines
-              $ K.map2 (trimValue $ csvGlobalTrim $ paraLayout p)
-              $ dropHead (paraBody p) csv
+    judge   = csvJudge $ paraLayout p
+    csv'    = omitEmptyLines
+               $ K.map2 (trimValue $ csvGlobalTrim $ paraLayout p)
+               $ dropHead (paraBody p) csv
 
 -- | Drop heading
 dropHead :: Int -> K.Map [Csv.Record]
@@ -278,22 +282,22 @@ trimValue (True  , False) = K.trimBegin
 trimValue (False , True)  = K.trimEnd
 
 -- | Create judgement.
-csvJudge :: Maybe K.TermName -> (Bool, Bool) -> CsvLayout -> Int -> Csv.Record -> K.JudgeC
-csvJudge maybeSeq to CsvLayout { csvClass = cl, csvTerms = ns } n values =
-    case maybeSeq of
-      Nothing   -> K.affirm cl ts
-      Just name -> K.affirm cl $ (name, K.pInt n) : ts
+csvJudge :: CsvLayout -> Int -> Csv.Record -> K.JudgeC
+csvJudge CsvLayout {..} n values =
+    case csvSeq of
+      Nothing   -> K.affirm csvClass ts
+      Just name -> K.affirm csvClass $ (name, K.pInt n) : ts
     where
-      ts  = termC to <$> zip ns values
+      ts = termC csvGlobalEmpty csvGlobalDecimal <$> zip csvTerms values
 
 -- | Create term content.
-termC :: (Bool, Bool) -> (CsvTerm, String) -> K.TermC
-termC (empty, dec) (t, s)
-    | csvEmpty t    = K.term t $ pEmptyText s
-    | csvDecimal t  = K.term t $ pDecText s
-    | empty         = K.term t $ pEmptyText s
-    | dec           = K.term t $ pDecText s
-    | otherwise     = K.term t $ K.pText s
+termC :: Bool -> Bool -> (CsvTerm, String) -> K.TermC
+termC empty dec (t, s) = K.term t c where
+    c | csvEmpty t    = pEmptyText s
+      | csvDecimal t  = pDecText s
+      | empty         = pEmptyText s
+      | dec           = pDecText s
+      | otherwise     = K.pText s
 
 pEmptyText :: String -> K.Content
 pEmptyText "" = K.empty
