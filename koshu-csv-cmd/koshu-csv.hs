@@ -75,7 +75,6 @@ data Para = Para
     , paraIncludes   :: [String]          -- ^ Inlucde lines
     , paraLicenses   :: [String]          -- ^ License lines
     , paraEmpty      :: Bool              -- ^ Convert empty string
-    , paraDecimal    :: Bool              -- ^ Convert decimal number
     , paraInput      :: [FilePath]        -- ^ Input CSV files
     , paraOutput     :: Maybe FilePath    -- ^ Output Koshucode file
 
@@ -90,16 +89,16 @@ initPara (Right (z, args)) =
     do comment <- readTextFiles $ req "include"
        license <- readTextFiles $ req "license"
        layout  <- readLayoutFiles $ req "layout"
+       let layout' = layout { csvGlobalDecimal = flag "to-decimal" }
        return $ Para { paraLayout     = case trim of
-                                          Nothing -> layout
-                                          Just t  -> layout { csvGlobalTrim = t }
+                                          Nothing -> layout'
+                                          Just t  -> layout' { csvGlobalTrim = t }
                      , paraBody       = body
                      , paraSeq        = K.toTermName <$> opt "seq" "/seq"
                      , paraEmacsMode  = flag "emacs-mode"
                      , paraIncludes   = comment
                      , paraLicenses   = license
                      , paraEmpty      = flag "to-empty"
-                     , paraDecimal    = flag "to-decimal"
                      , paraInput      = args
                      , paraOutput     = reql "output"
 
@@ -131,22 +130,29 @@ readTextFiles paths =
 
 data CsvLayout =
     CsvLayout
-    { csvClass       :: K.JudgeClass
-    , csvTerms       :: [CsvTerm]
-    , csvGlobalTrim  :: (Bool, Bool)
+    { csvClass          :: K.JudgeClass
+    , csvTerms          :: [CsvTerm]
+    , csvGlobalTrim     :: (Bool, Bool)
+    , csvGlobalDecimal  :: Bool
     } deriving (Show, Eq, Ord)
 
 instance K.Default CsvLayout where
-    def = CsvLayout { csvClass      = "CSV"
-                    , csvTerms      = []
-                    , csvGlobalTrim = (False, False) }
+    def = CsvLayout { csvClass          = "CSV"
+                    , csvTerms         = []
+                    , csvGlobalTrim    = (False, False)
+                    , csvGlobalDecimal = False }
 
 data CsvTerm =
     CsvTerm { csvTermName :: K.TermName
+            , csvDecimal  :: Bool
             } deriving (Show, Eq, Ord)
 
 instance K.ToTermName CsvTerm where
     toTermName = csvTermName
+
+csvTerm :: (K.ToTermName n) => n -> CsvTerm
+csvTerm n = CsvTerm { csvTermName = K.toTermName n
+                    , csvDecimal  = False }
 
 finishLayout :: K.Map CsvLayout
 finishLayout lay@CsvLayout { csvTerms = ts} =
@@ -156,7 +162,7 @@ finishLayout lay@CsvLayout { csvTerms = ts} =
 
 -- | List of numeric-named terms.
 numericTerms :: [CsvTerm]
-numericTerms = (CsvTerm . K.toTermName) <$> K.ints 1
+numericTerms = csvTerm <$> K.ints 1
 
 readLayoutFiles :: [FilePath] -> IO CsvLayout
 readLayoutFiles = loop K.def where
@@ -169,15 +175,16 @@ readLayoutFile path lay =
     do ls <- K.readClauses path
        K.abortLeft $ layoutClauses ls lay
 
-layoutClauses :: [K.TokenClause] -> CsvLayout -> K.Ab CsvLayout
+layoutClauses :: [K.TokenClause] -> K.AbMap CsvLayout
 layoutClauses [] lay = return lay
-layoutClauses (l:ls) lay = do lay' <- layoutClause (K.clauseTokens l) lay
-                              layoutClauses ls lay'
+layoutClauses (l:ls) lay =
+    do lay' <- K.abortable "clause" l $ layoutClause (K.clauseTokens l) lay
+       layoutClauses ls lay'
 
-layoutClause :: [K.Token] -> CsvLayout -> K.Ab CsvLayout
-layoutClause [P.Term n] lay =
-    let term = CsvTerm { csvTermName = K.toTermName n }
-    in Right $ lay { csvTerms = term : csvTerms lay }
+layoutClause :: [K.Token] -> K.AbMap CsvLayout
+layoutClause (P.Term n : ks) lay =
+    do term <- csvTermKeyword ks $ csvTerm n
+       Right $ lay { csvTerms = term : csvTerms lay }
 layoutClause [P.TBar "|==", P.TRaw cl] lay =
     Right $ lay { csvClass = cl }
 layoutClause [P.TRaw k] lay
@@ -185,32 +192,33 @@ layoutClause [P.TRaw k] lay
     | k == "trim-both"   = Right $ lay { csvGlobalTrim = (True,  True)  }
     | k == "trim-begin"  = Right $ lay { csvGlobalTrim = (True,  False) }
     | k == "trim-end"    = Right $ lay { csvGlobalTrim = (False, True)  }
-layoutClause l _ = K.abortable "clause" l $ Left $ K.abortBecause "unknown layout"
+layoutClause _ _ = Left $ K.abortBecause "unknown clause"
 
+csvTermKeyword :: [K.Token] -> K.AbMap CsvTerm
+csvTermKeyword = loop where
+    loop (P.TRaw "to-dec" : ks) term = loop ks $ term { csvDecimal = True }
+    loop (t : _) _ = K.abortable "keyword" t $ Left $ K.abortBecause "unknown keyword"
+    loop [] term = Right term
 
 -- --------------------------------------------  Convert CSV file
 
 convertPrintCsvFiles :: Para -> IO [String]
 convertPrintCsvFiles p =
     do ls <- convertPrintCsvFile (convertCsvString p) `mapM` paraInput p
-       return $ appendHeader
-                  (paraEmacsMode p)
-                  (paraIncludes p)
-                  (paraLicenses p)
-                  $ concat ls
+       return $ appendBlock [mode', include', license', concat ls]
+    where
+      mode'     | paraEmacsMode p  = ["** -*- koshu -*-"]
+                | otherwise        = []
 
-appendHeader :: Bool -> [String] -> [String] -> K.Map [String]
-appendHeader mode include license body = body' where
-    body'     = appendBlock [mode', include', license', body]
-    pad s     = "  " ++ s :: String
-    mode'     | mode          = ["** -*- koshu -*-"]
-              | otherwise     = []
-    include'  | null include  = []
-              | otherwise     = include
-    license'  | null license  = []
-              | otherwise     = ["=== license", ""]
-                                  ++ map pad license
-                                  ++ ["", "=== rel"]
+      include   = paraIncludes p
+      include'  | null include     = []
+                | otherwise        = include
+
+      license   = paraLicenses p
+      license'  | null license     = []
+                | otherwise        = ["=== license", ""]
+                                     ++ map ("  " ++) license
+                                     ++ ["", "=== rel"]
 
 appendBlock :: [[String]] -> [String]
 appendBlock [] = []
@@ -241,7 +249,7 @@ parseConvertCsv p s =
 -- | Convert CSV.
 convertCsv :: Para -> [Csv.Record] -> [K.JudgeC]
 convertCsv p csv = zipWith judge (K.ints 1) csv' where
-    judge = csvJudge (paraSeq p) (paraEmpty p, paraDecimal p) (paraLayout p)
+    judge = csvJudge (paraSeq p) (paraEmpty p, csvGlobalDecimal $ paraLayout p) (paraLayout p)
     csv'  = omitEmptyLines
               $ K.map2 (trimValue $ csvGlobalTrim $ paraLayout p)
               $ dropHead (paraBody p) csv
@@ -263,18 +271,22 @@ trimValue (False , True)  = K.trimEnd
 
 -- | Create judgement.
 csvJudge :: Maybe K.TermName -> (Bool, Bool) -> CsvLayout -> Int -> Csv.Record -> K.JudgeC
-csvJudge maybeSeq to CsvLayout { csvClass = cl, csvTerms = ns } n values
-    = case maybeSeq of
-        Nothing   -> K.affirm cl ts
-        Just name -> K.affirm cl $ (name, K.pInt n) : ts
+csvJudge maybeSeq to CsvLayout { csvClass = cl, csvTerms = ns } n values =
+    case maybeSeq of
+      Nothing   -> K.affirm cl ts
+      Just name -> K.affirm cl $ (name, K.pInt n) : ts
     where
       ts  = termC to <$> zip ns values
 
 -- | Create term content.
 termC :: (Bool, Bool) -> (CsvTerm, String) -> K.TermC
 termC (True, _) (t, "") = K.term t K.empty
-termC (_, False) (t, c) = K.term t (K.pText c)
-termC (_, True)  (t, c) = K.term t $ case K.decodeDecimal c of
-                                       Right d -> K.pDec d
-                                       _       -> K.pText c
+termC (_, dec) (t, s)
+    | dec           = K.term t $ pDecText s
+    | csvDecimal t  = K.term t $ pDecText s
+    | otherwise     = K.term t $ K.pText s
 
+pDecText :: String -> K.Content
+pDecText s = case K.decodeDecimal s of
+               Right d -> K.pDec d
+               _       -> K.pText s
