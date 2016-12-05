@@ -29,14 +29,19 @@ options :: [Z.Option]
 options =
     [ Z.help
     , Z.version
-    , Z.opt  ""  ["body"] "NUM"         "Line number at body starts (default 1)"
-    , Z.opt  ""  ["seq"] "/TERM"        "Add sequential number term (default /seq)"
-    , Z.req  ""  ["include"] "FILE.k"   "Include file"
-    , Z.flag ""  ["emacs-mode"]         "Include Emacs mode comment"
-    , Z.req  ""  ["license"] "FILE"     "Include license file"
-    , Z.flag ""  ["trim", "trim-both"]  "Trim spaces"
-    , Z.flag ""  ["trim-begin"]         "Trim spaces beginning of value"
-    , Z.flag ""  ["trim-end"]           "Trim spaces end of value"
+
+    , Z.flag ""  ["emacs-mode"]         "File: Include Emacs mode comment"
+    , Z.req  ""  ["include"] "FILE.k"   "File: Include file"
+    , Z.req  ""  ["license"] "FILE"     "File: Include license file"
+
+    , Z.opt  ""  ["body"] "NUM"         "Data: Line number at body starts (default 1)"
+
+    , Z.flag ""  ["to-decimal"]         "Term: Convert decimal number if passible"
+    , Z.flag ""  ["to-empty"]           "Term: Convert empty string to ()"
+    , Z.flag ""  ["trim", "trim-both"]  "Term: Trim spaces"
+    , Z.flag ""  ["trim-begin"]         "Term: Trim spaces beginning of value"
+    , Z.flag ""  ["trim-end"]           "Term: Trim spaces end of value"
+    , Z.opt  ""  ["seq"] "/TERM"        "Term: Add sequential number term (default /seq)"
     ]
 
 -- | Entry point of the @koshu-csv@ command.
@@ -58,11 +63,13 @@ mainPara p@Para { paraHelp = help, paraVersion = version }
 data Para = Para
     { paraBody       :: Int               -- ^ Line number at body starts
     , paraSeq        :: Maybe K.TermName  -- ^ Add sequential number term
-    , paraTrim       :: (Bool, Bool)      -- ^ Trim value
     , paraEmacsMode  :: Bool              -- ^ Inlucde emacs mode
     , paraIncludes   :: [String]          -- ^ Inlucde lines
     , paraLicenses   :: [String]          -- ^ License lines
     , paraJudgeType  :: JudgeType         -- ^ Judgement class and term names.
+    , paraTrim       :: (Bool, Bool)      -- ^ Trim value
+    , paraEmpty      :: Bool              -- ^ Convert empty string
+    , paraDecimal    :: Bool              -- ^ Convert decimal number
     , paraInput      :: [FilePath]        -- ^ Input CSV files
 
     , paraHelp       :: Bool
@@ -77,11 +84,13 @@ initPara (Right (z, args)) =
        license <- readTextFiles $ req "license"
        return $ Para { paraBody       = body
                      , paraSeq        = K.toTermName <$> opt "seq" "/seq"
-                     , paraTrim       = trim
                      , paraEmacsMode  = flag "emacs-mode"
                      , paraIncludes   = comment
                      , paraLicenses   = license
                      , paraJudgeType  = numericJudgeType "CSV"
+                     , paraTrim       = trim
+                     , paraEmpty      = flag "to-empty"
+                     , paraDecimal    = flag "to-decimal"
                      , paraInput      = args
 
                      , paraHelp       = flag "help"
@@ -169,7 +178,7 @@ parseConvertCsv p s =
 -- | Convert CSV.
 convertCsv :: Para -> [Csv.Record] -> [K.JudgeC]
 convertCsv p csv = zipWith judge (K.ints 1) csv' where
-    judge = csvJudge (paraSeq p) (paraJudgeType p)
+    judge = csvJudge (paraSeq p) (paraEmpty p, paraDecimal p) (paraJudgeType p)
     csv'  = omitEmptyLines
               $ K.map2 (trimValue $ paraTrim p)
               $ dropHead (paraBody p) csv
@@ -190,16 +199,19 @@ trimValue (True  , False) = K.trimBegin
 trimValue (False , True)  = K.trimEnd
 
 -- | Create judgement.
-csvJudge :: Maybe K.TermName -> JudgeType -> Int -> Csv.Record -> K.JudgeC
-csvJudge maybeSeq (JudgeType cl ns) n values
+csvJudge :: Maybe K.TermName -> (Bool, Bool) -> JudgeType -> Int -> Csv.Record -> K.JudgeC
+csvJudge maybeSeq to (JudgeType cl ns) n values
     = case maybeSeq of
         Nothing    -> K.affirm cl ts
         Just name -> K.affirm cl $ (name, K.pInt n) : ts
     where
-      ts  = zip ns (termC <$> values)
+      ts  = zip ns (termC to <$> values)
 
 -- | Create term content.
-termC :: String -> K.Content
-termC "" = K.empty
-termC c  = K.pText c
+termC :: (Bool, Bool) -> String -> K.Content
+termC (True, _) "" = K.empty
+termC (_, False) c = K.pText c
+termC (_, True)  c = case K.decodeDecimal c of
+                       Right d -> K.pDec d
+                       _       -> K.pText c
 
