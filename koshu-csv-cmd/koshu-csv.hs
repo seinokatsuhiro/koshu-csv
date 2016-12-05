@@ -74,7 +74,6 @@ data Para = Para
     , paraEmacsMode  :: Bool              -- ^ Inlucde emacs mode
     , paraIncludes   :: [String]          -- ^ Inlucde lines
     , paraLicenses   :: [String]          -- ^ License lines
-    , paraEmpty      :: Bool              -- ^ Convert empty string
     , paraInput      :: [FilePath]        -- ^ Input CSV files
     , paraOutput     :: Maybe FilePath    -- ^ Output Koshucode file
 
@@ -88,17 +87,17 @@ initPara (Left errs) = error $ unwords errs
 initPara (Right (z, args)) =
     do comment <- readTextFiles $ req "include"
        license <- readTextFiles $ req "license"
-       layout  <- readLayoutFiles $ req "layout"
-       let layout' = layout { csvGlobalDecimal = flag "to-decimal" }
+       lay  <- readLayoutFiles $ req "layout"
+       let lay' = lay { csvGlobalEmpty   = flag "to-empty"   || csvGlobalEmpty   lay
+                      , csvGlobalDecimal = flag "to-decimal" || csvGlobalDecimal lay }
        return $ Para { paraLayout     = case trim of
-                                          Nothing -> layout'
-                                          Just t  -> layout' { csvGlobalTrim = t }
+                                          Nothing -> lay'
+                                          Just t  -> lay' { csvGlobalTrim = t }
                      , paraBody       = body
                      , paraSeq        = K.toTermName <$> opt "seq" "/seq"
                      , paraEmacsMode  = flag "emacs-mode"
                      , paraIncludes   = comment
                      , paraLicenses   = license
-                     , paraEmpty      = flag "to-empty"
                      , paraInput      = args
                      , paraOutput     = reql "output"
 
@@ -133,6 +132,7 @@ data CsvLayout =
     { csvClass          :: K.JudgeClass
     , csvTerms          :: [CsvTerm]
     , csvGlobalTrim     :: (Bool, Bool)
+    , csvGlobalEmpty    :: Bool
     , csvGlobalDecimal  :: Bool
     } deriving (Show, Eq, Ord)
 
@@ -140,10 +140,12 @@ instance K.Default CsvLayout where
     def = CsvLayout { csvClass          = "CSV"
                     , csvTerms         = []
                     , csvGlobalTrim    = (False, False)
+                    , csvGlobalEmpty   = False
                     , csvGlobalDecimal = False }
 
 data CsvTerm =
     CsvTerm { csvTermName :: K.TermName
+            , csvEmpty    :: Bool
             , csvDecimal  :: Bool
             } deriving (Show, Eq, Ord)
 
@@ -152,6 +154,7 @@ instance K.ToTermName CsvTerm where
 
 csvTerm :: (K.ToTermName n) => n -> CsvTerm
 csvTerm n = CsvTerm { csvTermName = K.toTermName n
+                    , csvEmpty    = False
                     , csvDecimal  = False }
 
 finishLayout :: K.Map CsvLayout
@@ -188,15 +191,18 @@ layoutClause (P.Term n : ks) lay =
 layoutClause [P.TBar "|==", P.TRaw cl] lay =
     Right $ lay { csvClass = cl }
 layoutClause [P.TRaw k] lay
-    | k == "trim"        = Right $ lay { csvGlobalTrim = (True,  True)  }
-    | k == "trim-both"   = Right $ lay { csvGlobalTrim = (True,  True)  }
-    | k == "trim-begin"  = Right $ lay { csvGlobalTrim = (True,  False) }
-    | k == "trim-end"    = Right $ lay { csvGlobalTrim = (False, True)  }
+    | k == "trim"        = Right $ lay { csvGlobalTrim    = (True,  True)  }
+    | k == "trim-both"   = Right $ lay { csvGlobalTrim    = (True,  True)  }
+    | k == "trim-begin"  = Right $ lay { csvGlobalTrim    = (True,  False) }
+    | k == "trim-end"    = Right $ lay { csvGlobalTrim    = (False, True)  }
+    | k == "to-empty"    = Right $ lay { csvGlobalEmpty   = True }
+    | k == "to-decimal"  = Right $ lay { csvGlobalDecimal = True }
 layoutClause _ _ = Left $ K.abortBecause "unknown clause"
 
 csvTermKeyword :: [K.Token] -> K.AbMap CsvTerm
 csvTermKeyword = loop where
-    loop (P.TRaw "to-dec" : ks) term = loop ks $ term { csvDecimal = True }
+    loop (P.TRaw "to-dec"   : ks) term = loop ks $ term { csvDecimal = True }
+    loop (P.TRaw "to-empty" : ks) term = loop ks $ term { csvEmpty   = True }
     loop (t : _) _ = K.abortable "keyword" t $ Left $ K.abortBecause "unknown keyword"
     loop [] term = Right term
 
@@ -249,8 +255,10 @@ parseConvertCsv p s =
 -- | Convert CSV.
 convertCsv :: Para -> [Csv.Record] -> [K.JudgeC]
 convertCsv p csv = zipWith judge (K.ints 1) csv' where
-    judge = csvJudge (paraSeq p) (paraEmpty p, csvGlobalDecimal $ paraLayout p) (paraLayout p)
-    csv'  = omitEmptyLines
+    lay    = paraLayout p
+    global = (csvGlobalEmpty lay, csvGlobalDecimal lay)
+    judge  = csvJudge (paraSeq p) global (paraLayout p)
+    csv'   = omitEmptyLines
               $ K.map2 (trimValue $ csvGlobalTrim $ paraLayout p)
               $ dropHead (paraBody p) csv
 
@@ -280,11 +288,16 @@ csvJudge maybeSeq to CsvLayout { csvClass = cl, csvTerms = ns } n values =
 
 -- | Create term content.
 termC :: (Bool, Bool) -> (CsvTerm, String) -> K.TermC
-termC (True, _) (t, "") = K.term t K.empty
-termC (_, dec) (t, s)
-    | dec           = K.term t $ pDecText s
+termC (empty, dec) (t, s)
+    | csvEmpty t    = K.term t $ pEmptyText s
     | csvDecimal t  = K.term t $ pDecText s
+    | empty         = K.term t $ pEmptyText s
+    | dec           = K.term t $ pDecText s
     | otherwise     = K.term t $ K.pText s
+
+pEmptyText :: String -> K.Content
+pEmptyText "" = K.empty
+pEmptyText s  = K.pText s
 
 pDecText :: String -> K.Content
 pDecText s = case K.decodeDecimal s of
