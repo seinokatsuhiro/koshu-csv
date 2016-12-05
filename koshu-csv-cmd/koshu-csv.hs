@@ -36,7 +36,11 @@ mainPara :: Para -> IO ()
 mainPara p@Para { paraHelp = help, paraVersion = version }
     | help       = Z.printHelp usageHeader options
     | version    = putStrLn versionString
-    | otherwise  = convertPrintCsvFile (convertCsvString p) `mapM_` paraInput p
+    | otherwise  = do ls <- convertPrintCsvFiles p
+                      let output = unlines ls
+                      case paraOutput p of
+                        Nothing   -> putStr output
+                        Just path -> writeFile path output
 
 
 -- --------------------------------------------  Parameter
@@ -49,6 +53,7 @@ options =
     , Z.flag ""  ["emacs-mode"]         "File: Include Emacs mode comment"
     , Z.req  ""  ["include"] "FILE.k"   "File: Include file"
     , Z.req  ""  ["license"] "FILE"     "File: Include license file"
+    , Z.req  "o" ["output"] "FILE.k"    "File: Output file"
 
     , Z.req  "l" ["layout"] "FILE"      "Data: Layout file"
     , Z.opt  ""  ["body"] "NUM"         "Data: Line number at body starts (default 1)"
@@ -73,6 +78,7 @@ data Para = Para
     , paraEmpty      :: Bool              -- ^ Convert empty string
     , paraDecimal    :: Bool              -- ^ Convert decimal number
     , paraInput      :: [FilePath]        -- ^ Input CSV files
+    , paraOutput     :: Maybe FilePath    -- ^ Output Koshucode file
 
     , paraHelp       :: Bool
     , paraVersion    :: Bool
@@ -95,12 +101,14 @@ initPara (Right (z, args)) =
                      , paraEmpty      = flag "to-empty"
                      , paraDecimal    = flag "to-decimal"
                      , paraInput      = args
+                     , paraOutput     = reql "output"
 
                      , paraHelp       = flag "help"
                      , paraVersion    = flag "version" }
     where
       flag  = Z.getFlag    z
       req   = Z.getReq     z
+      reql  = Z.getReqLast z
       opt   = Z.getOptLast z
 
       body = K.fromMaybe 1 $ do
@@ -175,20 +183,14 @@ layoutClause l _ = K.abortable "clause" l $ Left $ K.abortBecause "unknown layou
 
 -- --------------------------------------------  Convert CSV file
 
--- | Convert and print CSV file to Koshucode.
-convertPrintCsvFile :: K.ManyMap String -> FilePath -> IO ()
-convertPrintCsvFile f path =
-    do content <- readFile path
-       K.putLines $ f content
-
--- | Convert CSV string.
-convertCsvString :: Para -> K.ManyMap String
-convertCsvString p s =
-    case K.plainEncode <$> parseConvertCsv p s of
-      body -> appendHeader (paraEmacsMode p)
-                           (paraIncludes p)
-                           (paraLicenses p)
-                           body
+convertPrintCsvFiles :: Para -> IO [String]
+convertPrintCsvFiles p =
+    do ls <- convertPrintCsvFile (convertCsvString p) `mapM` paraInput p
+       return $ appendHeader
+                  (paraEmacsMode p)
+                  (paraIncludes p)
+                  (paraLicenses p)
+                  $ concat ls
 
 appendHeader :: Bool -> [String] -> [String] -> K.Map [String]
 appendHeader mode include license body = body' where
@@ -208,6 +210,16 @@ appendBlock [] = []
 appendBlock ([] : bs) = appendBlock bs
 appendBlock [b]       = b
 appendBlock (b : bs)  = b ++ [""] ++ appendBlock bs
+
+-- | Convert and print CSV file to Koshucode.
+convertPrintCsvFile :: K.ManyMap String -> FilePath -> IO [String]
+convertPrintCsvFile f path =
+    do content <- readFile path
+       return $ f content
+
+-- | Convert CSV string.
+convertCsvString :: Para -> K.ManyMap String
+convertCsvString p s = K.plainEncode <$> parseConvertCsv p s
 
 
 -- --------------------------------------------  Convert CSV string
