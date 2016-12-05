@@ -120,8 +120,9 @@ initPara (Right (z, args)) =
 
 readTextFiles :: [FilePath] -> IO [String]
 readTextFiles paths =
-    do contents <- mapM readFile paths
-       return $ concatMap lines contents
+    do files  <- mapM K.readBzFile paths
+       bzList <- K.abortLeft $ mapM K.bzFileContent files
+       return $ concatMap K.linesCrlfBzString bzList
 
 
 -- --------------------------------------------  Layout
@@ -178,7 +179,8 @@ readLayoutFiles = loop K.def where
 
 readLayoutFile :: FilePath -> CsvLayout -> IO CsvLayout
 readLayoutFile path lay =
-    do ls <- K.readClauses path
+    do ls' <- K.readClauses path
+       ls  <- K.abortLeft ls'
        K.abortLeft $ layoutClauses ls lay
 
 layoutClauses :: [K.TokenClause] -> K.AbMap CsvLayout
@@ -246,8 +248,9 @@ appendBlock (b : bs)  = b ++ [""] ++ appendBlock bs
 -- | Convert and print CSV file to Koshucode.
 convertPrintCsvFile :: K.ManyMap String -> FilePath -> IO [String]
 convertPrintCsvFile f path =
-    do content <- readFile path
-       return $ f content
+    do file <- K.readBzFile path
+       bz   <- K.abortLeft $ K.bzFileContent file
+       return $ f $ K.bzString bz
 
 -- | Convert CSV string.
 convertCsvString :: Para -> K.ManyMap String
