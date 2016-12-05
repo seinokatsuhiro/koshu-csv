@@ -1,0 +1,27 @@
+name:                koshu-csv-cmd
+version:             0.1.0.0
+synopsis:            Koshucode CSV converter
+-- description:         
+license:             BSD3
+license-file:        LICENSE
+author:              SEINO Katsuhiro
+maintainer:          
+-- copyright:           
+category:            Data
+build-type:          Simple
+-- extra-source-files:  
+cabal-version:       >=1.10
+
+executable koshu-csv
+  main-is:             koshu-csv.hs
+  -- other-modules:       
+  -- other-extensions:    
+  build-depends:
+         base                        == 4.*
+       , csv                         == 0.*
+       , koshucode-baala-overture    >= 0.178
+       , koshucode-baala-syntax      >= 0.178
+       , koshucode-baala-data-plus   >= 0.178
+  -- hs-source-dirs:      
+  default-language:    Haskell2010
+
