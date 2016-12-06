@@ -310,17 +310,13 @@ csvJudge CsvLayout {..} n values =
 -- | Create term content.
 termC :: Bool -> Bool -> (CsvTerm, String) -> K.TermC
 termC empty dec (t, s) = K.term t c where
-    c | csvEmpty t    = pEmptyText s
-      | csvDecimal t  = pDecText s
-      | empty         = pEmptyText s
-      | dec           = pDecText s
-      | otherwise     = K.pText s
+    c      = pEmptyDecText empty' dec' s
+    empty' = empty || csvEmpty t
+    dec'   = dec   || csvDecimal t
 
-pEmptyText :: String -> K.Content
-pEmptyText "" = K.empty
-pEmptyText s  = K.pText s
-
-pDecText :: String -> K.Content
-pDecText s = case K.decodeDecimal s of
-               Right d -> K.pDec d
-               _       -> K.pText s
+pEmptyDecText :: Bool -> Bool -> String -> K.Content
+pEmptyDecText True _ ""  = K.empty
+pEmptyDecText _ False s  = K.pText s
+pEmptyDecText _ True  s  = case K.decodeDecimal s of
+                             Right d -> K.pDec d
+                             _       -> K.pText s
