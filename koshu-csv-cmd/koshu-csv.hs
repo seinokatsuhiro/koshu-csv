@@ -187,14 +187,14 @@ readLayoutFiles = loop K.def where
 
 readLayoutFile :: FilePath -> CsvLayout -> IO CsvLayout
 readLayoutFile path lay =
-    do ls' <- K.readClauses path
+    do ls' <- K.readClauseTokens path
        ls  <- K.abortLeft ls'
        K.abortLeft $ layoutClauses ls lay
 
-layoutClauses :: [K.TokenClause] -> K.AbMap CsvLayout
+layoutClauses :: [[K.Token]] -> K.AbMap CsvLayout
 layoutClauses [] lay = return lay
 layoutClauses (l:ls) lay =
-    do lay' <- K.abortable "clause" l $ layoutClause (K.clauseTokens l) lay
+    do lay' <- K.abortable "clause" l $ layoutClause l lay
        layoutClauses ls lay'
 
 layoutClause :: [K.Token] -> K.AbMap CsvLayout
