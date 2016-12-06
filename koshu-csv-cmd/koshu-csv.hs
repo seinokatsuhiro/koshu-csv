@@ -84,8 +84,8 @@ data Para = Para
 initPara :: Z.Parsed -> IO Para
 initPara (Left errs) = error $ unwords errs
 initPara (Right (z, args)) =
-    do comment <- readTextFiles $ req "include"
-       license <- readTextFiles $ req "license"
+    do comment <- readFilesLines $ req "include"
+       license <- readFilesLines $ req "license"
        lay  <- readLayoutFiles $ req "layout"
        let lay' = lay { csvSeq           = case opt "seq" "/seq" of
                                              Nothing -> csvSeq lay
@@ -118,11 +118,19 @@ initPara (Right (z, args)) =
            | flag "trim-right"  = Just (False, True)
            | otherwise          = Nothing
 
-readTextFiles :: [FilePath] -> IO [String]
-readTextFiles paths =
-    do files  <- mapM K.readBzFile paths
-       bzList <- K.abortLeft $ mapM K.bzFileContent files
-       return $ concatMap K.linesCrlfBzString bzList
+-- | Read multiple files.
+readFilesLines :: [FilePath] -> IO [String]
+readFilesLines paths =
+    do lsList <- mapM readFileLines paths
+       return $ concat lsList
+
+-- | Read file and split lines.
+readFileLines :: FilePath -> IO [String]
+readFileLines path =
+    do file <- K.readBzFile path
+       bz   <- K.abortLeft $ K.bzFileContent file
+       let ls = K.bzString <$> K.linesCrlfBz bz
+       return ls
 
 
 -- --------------------------------------------  Layout
