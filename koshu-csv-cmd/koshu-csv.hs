@@ -302,10 +302,11 @@ trimValue (False , True)  = K.trimEnd
 csvJudge :: CsvLayout -> Int -> Csv.Record -> K.JudgeC
 csvJudge CsvLayout {..} n values =
     case csvSeq of
-      Nothing   -> K.affirm csvClass ts
-      Just name -> K.affirm csvClass $ (name, K.pInt n) : ts
+      Nothing   -> K.affirm csvClass ts'
+      Just name -> K.affirm csvClass $ (name, K.pInt n) : ts'
     where
-      ts = termC csvGlobalEmpty csvGlobalDecimal <$> zip csvTerms values
+      ts' = K.omitEmpty ts
+      ts  = termC csvGlobalEmpty csvGlobalDecimal <$> zip csvTerms values
 
 -- | Create term content.
 termC :: Bool -> Bool -> (CsvTerm, String) -> K.TermC
