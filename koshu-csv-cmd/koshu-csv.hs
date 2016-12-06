@@ -59,7 +59,7 @@ options =
     , Z.req  "l" ["layout"] "FILE"      "Data: Layout file"
     , Z.req  ""  ["drop"] "NUM"         "Data: Number of dropping lines"
 
-    , Z.flag ""  ["to-decimal"]         "Term: Convert decimal number if passible"
+    , Z.flag ""  ["to-dec"]             "Term: Convert decimal number if passible"
     , Z.flag ""  ["to-empty"]           "Term: Convert empty string to ()"
     , Z.flag ""  ["trim", "trim-both"]  "Term: Trim spaces"
     , Z.flag ""  ["trim-begin"]         "Term: Trim spaces beginning of value"
@@ -93,8 +93,8 @@ initPara (Right (z, args)) =
                       , csvDrop          = case reql "drop" of
                                              Nothing -> csvDrop lay
                                              Just n  -> K.fromMaybe 1 $ K.stringInt n
-                      , csvGlobalEmpty   = flag "to-empty"   || csvGlobalEmpty   lay
-                      , csvGlobalDecimal = flag "to-decimal" || csvGlobalDecimal lay }
+                      , csvGlobalEmpty   = flag "to-empty"  || csvGlobalEmpty   lay
+                      , csvGlobalDecimal = flag "to-dec"    || csvGlobalDecimal lay }
        return $ Para { paraLayout     = case trim of
                                           Nothing -> lay'
                                           Just t  -> lay' { csvGlobalTrim = t }
@@ -217,7 +217,7 @@ layoutClause [P.TRaw k] lay
     | k == "trim-begin"  = Right $ lay { csvGlobalTrim    = (True,  False) }
     | k == "trim-end"    = Right $ lay { csvGlobalTrim    = (False, True)  }
     | k == "to-empty"    = Right $ lay { csvGlobalEmpty   = True }
-    | k == "to-decimal"  = Right $ lay { csvGlobalDecimal = True }
+    | k == "to-dec"      = Right $ lay { csvGlobalDecimal = True }
 layoutClause _ _ = Left $ K.abortBecause "unknown clause"
 
 csvTermKeyword :: [K.Token] -> K.AbMap CsvTerm
