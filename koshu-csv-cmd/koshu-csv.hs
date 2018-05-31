@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# OPTIONS_GHC -Wall #-}
 
@@ -42,6 +43,9 @@ mainPara p@Para { paraHelp = help, paraVersion = version }
                       case paraOutput p of
                         Nothing   -> K.putMix K.crlfBreak output
                         Just path -> K.writeMix K.crlfBreak path output
+
+asText :: K.Tx -> K.Tx
+asText = id
 
 
 -- --------------------------------------------  Parameter
@@ -92,7 +96,7 @@ initPara (Right (z, args)) =
                                              Just n  -> Just $ K.toTermName n
                       , csvDrop          = case reql "drop" of
                                              Nothing -> csvDrop lay
-                                             Just n  -> K.fromMaybe 1 $ K.stringInt n
+                                             Just n  -> K.fromMaybe 1 $ K.tInt n
                       , csvGlobalEmpty   = flag "to-empty"  || csvGlobalEmpty   lay
                       , csvGlobalDecimal = flag "to-dec"    || csvGlobalDecimal lay }
        return $ Para { paraLayout     = case trim of
@@ -129,7 +133,7 @@ readFileLines :: FilePath -> IO [String]
 readFileLines path =
     do file <- K.readBzFile path
        bz   <- K.abortLeft $ K.bzFileContent file
-       let ls = K.bzString <$> K.linesCrlfBz bz
+       let ls = K.bzString <$> K.bzLines bz
        return ls
 
 
@@ -163,6 +167,7 @@ data CsvTerm =
 
 instance K.ToTermName CsvTerm where
     toTermName = csvTermName
+    toTermNameOrd _ = K.toTermName . csvTermName
 
 csvTerm :: (K.ToTermName n) => n -> CsvTerm
 csvTerm n = CsvTerm { csvTermName = K.toTermName n
@@ -202,14 +207,14 @@ layoutClause (P.Term n : ks) lay =
     do term <- csvTermKeyword ks $ csvTerm n
        Right $ lay { csvTerms = term : csvTerms lay }
 layoutClause [P.TBar "|==", P.TRaw cl] lay =
-    Right $ lay { csvClass = cl }
+    Right $ lay { csvClass = K.tString cl }
 layoutClause (P.TRaw "drop" : ts) lay =
     case ts of
-      [P.TRaw n] -> case K.stringInt n of
+      [P.TRaw n] -> case K.tInt n of
                       Just i  -> Right $ lay { csvDrop = i }
-                      Nothing -> Left $ K.abortBecause "Expect integer"
-      _                       -> Left $ K.abortBecause "Expect integer"
-layoutClause [P.TRaw "seq"]           lay = Right $ lay { csvSeq = Just $ K.toTermName "seq" }
+                      Nothing -> Left $ K.abortBecause $ asText "Expect integer"
+      _                       -> Left $ K.abortBecause $ asText "Expect integer"
+layoutClause [P.TRaw "seq"]           lay = Right $ lay { csvSeq = Just $ K.toTermName $ asText "seq" }
 layoutClause [P.TRaw "seq", P.Term n] lay = Right $ lay { csvSeq = Just $ K.toTermName n }
 layoutClause [P.TRaw k] lay
     | k == "trim"        = Right $ lay { csvGlobalTrim    = (True,  True)  }
@@ -218,13 +223,13 @@ layoutClause [P.TRaw k] lay
     | k == "trim-end"    = Right $ lay { csvGlobalTrim    = (False, True)  }
     | k == "to-empty"    = Right $ lay { csvGlobalEmpty   = True }
     | k == "to-dec"      = Right $ lay { csvGlobalDecimal = True }
-layoutClause _ _ = Left $ K.abortBecause "unknown clause"
+layoutClause _ _ = Left $ K.abortBecause $ asText "unknown clause"
 
 csvTermKeyword :: [K.Token] -> K.AbMap CsvTerm
 csvTermKeyword = loop where
     loop (P.TRaw "to-dec"   : ks) term = loop ks $ term { csvDecimal = True }
     loop (P.TRaw "to-empty" : ks) term = loop ks $ term { csvEmpty   = True }
-    loop (t : _) _ = K.abortable "keyword" t $ Left $ K.abortBecause "unknown keyword"
+    loop (t : _) _ = K.abortable "keyword" t $ Left $ K.abortBecause $ asText "unknown keyword"
     loop [] term = Right term
 
 -- --------------------------------------------  Convert CSV file
@@ -234,7 +239,7 @@ convertPrintCsvFiles p =
     do ls <- convertPrintCsvFile (convertCsvString p) `mapM` paraInput p
        return $ appendBlock $ mode' : include' : license' : ls
     where
-      mode'     | paraEmacsMode p  = mixes ["** -*- koshu -*-"]
+      mode'     | paraEmacsMode p  = mixes [asText "** -*- koshu -*-"]
                 | otherwise        = []
 
       include   = paraIncludes p
@@ -263,7 +268,7 @@ convertPrintCsvFile f path =
 
 -- | Convert CSV string.
 convertCsvString :: Para -> FilePath -> String -> [K.MixText]
-convertCsvString p path content = K.mixPlainEncode <$> parseConvertCsv p path content
+convertCsvString p path content = K.mixEncode <$> parseConvertCsv p path content
 
 mixes :: (Functor f, K.Mix a) => f a -> f K.MixText
 mixes = fmap K.mix
@@ -284,7 +289,7 @@ convertCsv p csv = zipWith judge (K.ints 1) csv' where
     lay     = paraLayout p
     judge   = csvJudge lay
     csv'    = omitEmptyLines
-               $ K.map2 (trimValue $ csvGlobalTrim $ paraLayout p)
+               $ map (map $ trimValue $ csvGlobalTrim $ paraLayout p)
                $ drop (csvDrop lay) csv
 
 -- | Omit empty lines.
@@ -294,7 +299,7 @@ omitEmptyLines = K.omit (== [""])
 -- | Trim begin or end of value.
 trimValue :: (Bool, Bool) -> K.Map String
 trimValue (False , False) = id
-trimValue (True  , True)  = K.trimBoth 
+trimValue (True  , True)  = K.trimBoth
 trimValue (True  , False) = K.trimBegin
 trimValue (False , True)  = K.trimEnd
 
@@ -305,7 +310,7 @@ csvJudge CsvLayout {..} n values =
       Nothing   -> K.affirm csvClass ts'
       Just name -> K.affirm csvClass $ (name, K.pInt n) : ts'
     where
-      ts' = K.omitEmpty ts
+      ts' = K.cutEmpty ts
       ts  = termC csvGlobalEmpty csvGlobalDecimal <$> zip csvTerms values
 
 -- | Create term content.
